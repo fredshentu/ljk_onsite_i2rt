@@ -1,0 +1,10 @@
+[project]
+name = "quest-tools"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy-quaternion>=2024.0.13",
+    "quaternion>=3.5.2.post4",
+]
