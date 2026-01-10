@@ -1,0 +1,15 @@
+<mujoco model="no_gripper">
+  <compiler angle="radian" meshdir="assets"/>
+
+  <asset>
+    <mesh name="link_6_collision" file="link_6_collision.stl"/>
+  </asset>
+
+  <body name="link_6" pos="0 0.0353 0.0395" quat="1 -1 0 0">
+    <joint name="joint6" pos="0 0 0" axis="0 0 1" range="-2.0944 2.0944" actuatorfrcrange="-10 10"/>
+    <geom pos="-5.10177e-05 -0.00269952 0.0481778" quat="1 -1 -1 -1" type="mesh" rgba="1 0.6 0 1" mesh="link_6_collision"/>
+    <site name="tcp_site" pos="0 0 0" quat="1 0 0 -1" size="0.005" rgba="1 0 0 1"/>
+    <site name="grasp_site" pos="0 0 0.1347" quat="1 0 0 -1" size="0.005" rgba="0 1 0 1"/>
+  </body>
+
+</mujoco>

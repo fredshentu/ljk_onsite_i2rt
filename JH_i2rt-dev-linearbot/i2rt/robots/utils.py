@@ -1,7 +1,9 @@
 import enum
 import logging
 import os
+import shutil
 import time
+import xml.etree.ElementTree as ET
 from functools import partial
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -10,12 +12,58 @@ import numpy as np
 from i2rt.motor_drivers.dm_driver import DMChainCanInterface
 
 I2RT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Legacy monolithic XML paths (kept for backwards compatibility)
 YAM_XML_PATH = os.path.join(I2RT_ROOT, "robot_models/yam/yam.xml")
 YAM_XML_LW_GRIPPER_PATH = os.path.join(I2RT_ROOT, "robot_models/yam/yam_lw_gripper.xml")
 YAM_XML_LINEAR_4310_PATH = os.path.join(I2RT_ROOT, "robot_models/yam/yam_4310_linear.xml")
 YAM_TEACHING_HANDLE_PATH = os.path.join(I2RT_ROOT, "robot_models/yam/yam_teaching_handle.xml")
 YAM_NO_GRIPPER_PATH = os.path.join(I2RT_ROOT, "robot_models/yam/yam_no_gripper.xml")
 
+# Decoupled arm XML paths
+YAM_ARM_BASE_PATH = os.path.join(I2RT_ROOT, "robot_models/arm/yam/yam_arm_base.xml")
+ARX_R5_ARM_BASE_PATH = os.path.join(I2RT_ROOT, "robot_models/arm/arx_r5_arm_base.xml")
+BIG_YAM_ARM_BASE_PATH = os.path.join(I2RT_ROOT, "robot_models/arm/big_yam_arm_base.xml")
+
+# Decoupled gripper XML paths
+GRIPPER_CRANK_4310_PATH = os.path.join(I2RT_ROOT, "robot_models/gripper/crank_4310.xml")
+GRIPPER_LINEAR_3507_PATH = os.path.join(I2RT_ROOT, "robot_models/gripper/linear_3507.xml")
+GRIPPER_LINEAR_4310_PATH = os.path.join(I2RT_ROOT, "robot_models/gripper/linear_4310.xml")
+GRIPPER_NO_GRIPPER_PATH = os.path.join(I2RT_ROOT, "robot_models/gripper/no_gripper.xml")
+GRIPPER_TEACHING_HANDLE_PATH = os.path.join(I2RT_ROOT, "robot_models/gripper/teaching_handle.xml")
+
+
+class ArmType(enum.Enum):
+    YAM = "yam"
+    ARX_R5 = "arx_r5"
+    BIG_YAM = "big_yam"
+
+    @classmethod
+    def from_string_name(cls, name: str) -> "ArmType":
+        if name == "yam":
+            return cls.YAM
+        elif name == "arx_r5":
+            return cls.ARX_R5
+        elif name == "big_yam":
+            return cls.BIG_YAM
+        else:
+            raise ValueError(
+                f"Unknown arm type: {name}, arm has to be one of the following: {ArmType.available_arms()}"
+            )
+
+    @classmethod
+    def available_arms(cls) -> List[str]:
+        return [arm.value for arm in ArmType]
+
+    def get_arm_xml_path(self) -> str:
+        if self == ArmType.YAM:
+            return YAM_ARM_BASE_PATH
+        elif self == ArmType.ARX_R5:
+            return ARX_R5_ARM_BASE_PATH
+        elif self == ArmType.BIG_YAM:
+            return BIG_YAM_ARM_BASE_PATH
+        else:
+            raise ValueError(f"Unknown arm type: {self}")
 
 class GripperType(enum.Enum):
     CRANK_4310 = "crank_4310"  # a 4310 motor with a crank
@@ -74,6 +122,7 @@ class GripperType(enum.Enum):
             raise NotImplementedError
 
     def get_xml_path(self) -> str:
+        """Returns the legacy monolithic XML path for backwards compatibility."""
         if self == GripperType.CRANK_4310:
             return YAM_XML_PATH
         elif self == GripperType.LINEAR_3507:
@@ -84,6 +133,21 @@ class GripperType(enum.Enum):
             return YAM_TEACHING_HANDLE_PATH
         elif self == GripperType.NO_GRIPPER:
             return YAM_NO_GRIPPER_PATH
+        else:
+            raise ValueError(f"Unknown gripper type: {self}")
+
+    def get_gripper_xml_path(self) -> str:
+        """Returns the path to the decoupled gripper XML snippet."""
+        if self == GripperType.CRANK_4310:
+            return GRIPPER_CRANK_4310_PATH
+        elif self == GripperType.LINEAR_3507:
+            return GRIPPER_LINEAR_3507_PATH
+        elif self == GripperType.LINEAR_4310:
+            return GRIPPER_LINEAR_4310_PATH
+        elif self == GripperType.YAM_TEACHING_HANDLE:
+            return GRIPPER_TEACHING_HANDLE_PATH
+        elif self == GripperType.NO_GRIPPER:
+            return GRIPPER_NO_GRIPPER_PATH
         else:
             raise ValueError(f"Unknown gripper type: {self}")
 
@@ -151,6 +215,127 @@ class GripperType(enum.Enum):
             )
         elif self in [GripperType.YAM_TEACHING_HANDLE, GripperType.NO_GRIPPER]:
             return -1.0, -1.0, -1.0, None
+
+
+def _find_placeholder_body(element: ET.Element) -> Optional[ET.Element]:
+    for child in element:
+        if child.tag == "body":
+            has_child_body = any(c.tag == "body" for c in child)
+            if not has_child_body:
+                return child
+
+            result = _find_placeholder_body(child)
+            if result is not None:
+                return result
+    return None
+
+
+def _get_meshdir_from_xml(root: ET.Element, xml_path: str) -> str:
+    compiler = root.find("compiler")
+    if compiler is not None:
+        meshdir = compiler.get("meshdir", ".")
+    else:
+        meshdir = "."
+    
+    xml_dir = os.path.dirname(xml_path)
+    return os.path.normpath(os.path.join(xml_dir, meshdir))
+
+
+def _collect_mesh_files(root: ET.Element, xml_path: str) -> Dict[str, str]:
+    meshdir = _get_meshdir_from_xml(root, xml_path)
+    mesh_files = {}
+
+    asset = root.find("asset")
+    if asset is not None:
+        for mesh in asset.findall("mesh"):
+            mesh_file = mesh.get("file")
+            if mesh_file:
+                abs_path = os.path.join(meshdir, mesh_file)
+                mesh_files[mesh_file] = abs_path
+
+    return mesh_files
+
+
+def assemble_robot_xml(
+    gripper_type: GripperType,
+    arm_base_path: str = YAM_ARM_BASE_PATH,
+) -> Tuple[str, Dict[str, str]]:
+    gripper_path = gripper_type.get_gripper_xml_path()
+
+    arm_tree = ET.parse(arm_base_path)
+    arm_root = arm_tree.getroot()
+
+    gripper_tree = ET.parse(gripper_path)
+    gripper_root = gripper_tree.getroot()
+
+    mesh_files = _collect_mesh_files(arm_root, arm_base_path)
+    gripper_meshes = _collect_mesh_files(gripper_root, gripper_path)
+    mesh_files.update(gripper_meshes)
+
+    arm_asset = arm_root.find("asset")
+    gripper_asset = gripper_root.find("asset")
+
+    if gripper_asset is not None:
+        if arm_asset is None:
+            arm_asset = ET.SubElement(arm_root, "asset")
+
+        existing_meshes = {m.get("name") for m in arm_asset.findall("mesh")}
+
+        for mesh in gripper_asset.findall("mesh"):
+            mesh_name = mesh.get("name")
+            if mesh_name not in existing_meshes:
+                arm_asset.append(mesh)
+
+    worldbody = arm_root.find("worldbody")
+    if worldbody is not None:
+        placeholder_body = _find_placeholder_body(worldbody)
+        if placeholder_body is not None:
+            gripper_body = gripper_root.find("body")
+            if gripper_body is None:
+                gripper_worldbody = gripper_root.find("worldbody")
+                if gripper_worldbody is not None:
+                    gripper_body = gripper_worldbody.find("body")
+
+            if gripper_body is not None:
+                placeholder_body.append(gripper_body)
+
+    compiler = arm_root.find("compiler")
+    if compiler is not None:
+        compiler.set("meshdir", "assets")
+
+    ET.indent(arm_root, space="  ")
+    assembled_xml = ET.tostring(arm_root, encoding="unicode")
+    assembled_xml = '<?xml version="1.0" encoding="utf-8"?>\n' + assembled_xml
+
+    return assembled_xml, mesh_files
+
+
+def save_assembled_robot_xml(
+    gripper_type: GripperType,
+    arm_base_path: str = YAM_ARM_BASE_PATH,
+) -> str:
+    assembled_xml, mesh_files = assemble_robot_xml(gripper_type, arm_base_path)
+
+    arm_name = os.path.splitext(os.path.basename(arm_base_path))[0]
+    filename = f"{arm_name}_{gripper_type.value}.xml"
+
+    robot_dir = os.path.join("/tmp", f"{arm_name}_{gripper_type.value}")
+    os.makedirs(robot_dir, exist_ok=True)
+
+    assets_dir = os.path.join(robot_dir, "assets")
+    os.makedirs(assets_dir, exist_ok=True)
+
+    for mesh_filename, src_path in mesh_files.items():
+        dst_path = os.path.join(assets_dir, mesh_filename)
+        if os.path.exists(src_path) and not os.path.exists(dst_path):
+            shutil.copy2(src_path, dst_path)
+
+    # Save the assembled XML
+    filepath = os.path.join(robot_dir, filename)
+    with open(filepath, "w") as f:
+        f.write(assembled_xml)
+
+    return filepath
 
 
 class JointMapper:
