@@ -1,2 +1,6 @@
 # Temp files
 ._*
+
+**/__pycache__/**
+**/.vscode/**
+**/.venv/**
