@@ -263,8 +263,7 @@ def get_whole_robot(
         with_gripper = False
         with_teaching_handle = False
         
-    arm_base_path = arm_type.get_arm_xml_path()
-    model_path = save_assembled_robot_xml(gripper_type, arm_base_path)
+    model_path = save_assembled_robot_xml(gripper_type, arm_type)
     model_path = modify_gripper_inertial(model_path, gripper_mass, gripper_inertia)
     
     motor_list = [
@@ -371,7 +370,7 @@ if __name__ == "__main__":
     gripper_type = GripperType.from_string_name(args.gripper)
 
     print(f"Starting robot with arm={arm_type.value}, gripper={gripper_type.value}, channel={args.channel}")
-    robot = get_whole_robot(channel=args.channel, arm_type=arm_type, gripper_type=gripper_type)
+    robot = get_whole_robot(channel=args.channel, arm_type=arm_type, gripper_type=gripper_type, gripper_mass=0.550)
     while True:
         time.sleep(1)
         print(robot.get_observations())

@@ -24,6 +24,11 @@ dependencies = [
     "ruckig==0.15.3",
     "threadpoolctl==3.6.0",
     "tyro==0.9.26",
+    "quaternion>=3.5.2.post4",
+    "numpy-quaternion>=2024.0.13",
+    "rerun-sdk>=0.28.2",
+    "scipy>=1.15.3",
+    "modern-robotics>=1.1.1",
 ]
 
 [project.optional-dependencies]
