@@ -10,7 +10,7 @@ from i2rt.robots.motor_chain_robot import MotorChainRobot
 from i2rt.robots.utils import ArmType, GripperType, save_assembled_robot_xml
 from i2rt.robots.kinematics import Kinematics
 
-from modern_robotics import RpToTrans
+from modern_robotics import RpToTrans, TransToRp
 
 
 def add_world_frame_axes(viewer, axis_length: float = 0.15, axis_radius: float = 0.005):
@@ -97,9 +97,9 @@ class SimulatedRobot:
     def __init__(self, model: mujoco.MjModel, data: mujoco.MjData):
         self.model = model
         self.data = data
-        self._joint_pos = np.zeros(model.nq)
+        self._joint_pos = np.zeros(6)  # Only arm joints (gripper stored separately)
         self._gripper_pos = np.array([1.0])
-        self._dt = 0.01  # Simulation timestep for animation
+        # self._dt = 0.01  # Simulation timestep for animation
 
         # Launch viewer automatically
         self._viewer = mujoco.viewer.launch_passive(
@@ -151,7 +151,7 @@ class SimulatedRobot:
             start_joints = self._joint_pos.copy()
             start_gripper = self._gripper_pos[0]
 
-            steps = int(time_interval_s / self._dt)
+            steps = time_interval_s / 0.01
             for i in range(steps + 1):
                 if not self._viewer.is_running():
                     break
@@ -162,7 +162,7 @@ class SimulatedRobot:
                     [start_gripper + alpha * (target_gripper - start_gripper)]
                 )
                 self._update_viewer()
-                time.sleep(self._dt)
+                time.sleep(0.01)
         else:
             # No viewer, set instantly
             self._joint_pos = target_joints
@@ -204,13 +204,18 @@ class RelativeControl:
         print("Robot connection closed")
 
     def get_current_pose(self) -> np.ndarray:
-        obs = self.robot.get_observations()
-        q = obs["joint_pos"]
-        return self.kinematics.fk(q)
+        q = self.get_current_joints()
+        return self.kinematics.fk(q[:6])  # FK expects only arm joints
 
     def get_current_joints(self) -> np.ndarray:
         obs = self.robot.get_observations()
-        return obs["joint_pos"]
+        joint_pos = obs["joint_pos"]
+        # Real robot returns 6 arm joints separately from gripper
+        # Sim robot returns all 7 in joint_pos
+        # Kinematics expects 7 joints (arm + gripper)
+        if len(joint_pos) == 6 and "gripper_pos" in obs:
+            joint_pos = np.append(joint_pos, obs["gripper_pos"])
+        return joint_pos
 
     def get_current_gripper_pos(self) -> np.ndarray:
         obs = self.robot.get_observations()
@@ -234,6 +239,14 @@ class RelativeControl:
         time_interval_s: float = 2.0,
         verbose: bool = False,
     ) -> bool:
+        if verbose:
+            R, p = TransToRp(delta_T)
+            r = Rotation.from_matrix(R)
+            euler_angles = r.as_euler("xyz", degrees=False)
+            roll, pitch, yaw = euler_angles
+            print(roll, pitch, yaw)
+            print(p)
+
         success, target_joints = self._compute_goal(delta_T, verbose)
 
         if success:
@@ -245,7 +258,8 @@ class RelativeControl:
             full_joint_positions = np.append(target_joints[:6], gripper_pos)
 
             self.robot.move_joints(
-                full_joint_positions, time_interval_s=time_interval_s
+                full_joint_positions,
+                time_interval_s=time_interval_s,
             )
             return True
         else:
@@ -293,14 +307,18 @@ class RelativeControl:
             raise ValueError(f"delta_T must have shape (4, 4), got {delta_T.shape}")
 
         current_joints = self.get_current_joints()
-        current_pose = self.kinematics.fk(current_joints)
-        target_pose = delta_T @ current_pose  # World-frame relative motion
+        current_pose = self.kinematics.fk(
+            current_joints[:6]
+        )  # FK expects only arm joints
+        target_pose = current_pose @ delta_T
 
         success, target_joints = self.kinematics.ik(
             target_pose=target_pose,
             site_name=self.site_name,
-            init_q=current_joints,
+            init_q=current_joints[:6],  # IK expects only arm joints
             verbose=verbose,
+            pos_threshold=0.001,
+            ori_threshold=0.001,
         )
 
         return success, target_joints
@@ -325,7 +343,7 @@ def create_relative_controller(
     return robot, controller
 
 
-def create_simulated_controller(
+def create_relative_sim_controller(
     arm_type: ArmType = ArmType.YAM,
     gripper_type: GripperType = GripperType.CRANK_4310,
     site_name: str = "grasp_site",
@@ -409,17 +427,19 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    dr_rad = np.deg2rad(args.dr)
-    dp_rad = np.deg2rad(args.dp)
-    dyaw_rad = np.deg2rad(args.dyaw)
-
     delta_p = np.array([args.dx, args.dy, args.dz])
-    delta_R = Rotation.from_euler("xyz", [dr_rad, dp_rad, dyaw_rad]).as_matrix()
+    delta_R = Rotation.from_euler(
+        "xyz",
+        [args.dr, args.dp, args.dyaw],
+        degrees=True,
+    ).as_matrix()
     delta_T = RpToTrans(delta_R, delta_p)
+
+    print(delta_T)
 
     # Only difference: which factory function to call
     if args.sim:
-        robot, controller = create_simulated_controller(
+        robot, controller = create_relative_sim_controller(
             arm_type=ArmType.YAM,
             gripper_type=GripperType.CRANK_4310,
         )

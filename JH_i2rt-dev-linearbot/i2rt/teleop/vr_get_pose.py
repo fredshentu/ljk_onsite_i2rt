@@ -4,12 +4,25 @@ import numpy as np
 import rerun as rr
 from dataclasses import dataclass, field
 from typing import Optional
-from modern_robotics import TransInv, TransToRp
+from modern_robotics import TransInv, TransToRp, RpToTrans
 
 from scipy.spatial.transform import Rotation
 
 
 CLUTCH_THRESHOLD = 0.8
+
+# Transformation from Quest controller frame to World frame
+# Quest controller frame (natural pose): different axis orientation
+# World frame: X right, Y up, Z forward
+# This rotation aligns Quest axes with World frame axes
+T_QUEST_TO_WORLD = np.array(
+    [
+        [0, 0, -1, 0],  # World X = -Quest Z
+        [-1, 0, 0, 0],  # World Y = -Quest X
+        [0, 1, 0, 0],  # World Z = Quest Y
+        [0, 0, 0, 1],
+    ]
+)
 
 
 @dataclass
@@ -24,10 +37,31 @@ class ClutchTracker:
     right: HandState = field(default_factory=HandState)
 
 
+def convert_left_to_right_handed(quest_matrix: np.ndarray) -> np.ndarray:
+    y_flip_transform = np.array(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    intermediate_result = y_flip_transform @ quest_matrix
+    final_result = intermediate_result @ TransInv(y_flip_transform)
+
+    return final_result
+
+
 def compute_relative_transform(
     current_pose: np.ndarray,
     last_pose: np.ndarray,
 ) -> np.ndarray:
+    """Compute relative motion in the controller frame (local/body frame).
+
+    This computes: T_last^{-1} @ T_current
+    Which gives the delta expressed in the controller's local coordinate system.
+    """
     return TransInv(last_pose) @ current_pose
 
 
@@ -136,13 +170,14 @@ def process_hand_clutch(
     T_rel = None
 
     if clutch_pressed:
+        current_pose_rh = convert_left_to_right_handed(current_pose)
         if hand_state.last_pose is not None:
-            T_rel = compute_relative_transform(current_pose, hand_state.last_pose)
+            T_rel = compute_relative_transform(current_pose_rh, hand_state.last_pose)
             print(
                 f"{hand_name.capitalize()} Hand - Clutch PRESSED - Relative transform: {T_rel}"
             )
 
-        hand_state.last_pose = current_pose.copy()
+        hand_state.last_pose = current_pose_rh.copy()
         hand_state.clutch_was_pressed = True
 
     else:
@@ -198,6 +233,8 @@ if __name__ == "__main__":
             "left",
         )
         if left_rel is not None:
+            # Transform relative motion to world frame
+            # left_rel_world = transform_relative_to_world_frame(left_rel)
             log_relative_transform("left_hand_relative", left_rel)
 
         right_rel = process_hand_clutch(
@@ -207,17 +244,8 @@ if __name__ == "__main__":
             "right",
         )
         if right_rel is not None:
-
-            T_rel = np.array(
-                [
-                    [0, -1, 0, 0],
-                    [-1, 0, 0, 0],
-                    [0, 0, 1, 0],
-                    [0, 0, 0, 1],
-                ]
-            )
-            # right_rel = T_rel @ right_rel
-
+            # Transform relative motion to world frame
+            # right_rel_world = transform_relative_to_world_frame(right_rel)
             log_relative_transform("right_hand_relative", right_rel)
 
         time.sleep(0.033)
