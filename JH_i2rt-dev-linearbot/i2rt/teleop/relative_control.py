@@ -151,7 +151,7 @@ class SimulatedRobot:
             start_joints = self._joint_pos.copy()
             start_gripper = self._gripper_pos[0]
 
-            steps = time_interval_s / 0.01
+            steps = int(time_interval_s / 0.01)
             for i in range(steps + 1):
                 if not self._viewer.is_running():
                     break
