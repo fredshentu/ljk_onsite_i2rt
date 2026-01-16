@@ -258,9 +258,10 @@ def _collect_mesh_files(root: ET.Element, xml_path: str) -> Dict[str, str]:
 
 def assemble_robot_xml(
     gripper_type: GripperType,
-    arm_base_path: str = YAM_ARM_BASE_PATH,
+    arm_type: ArmType,
 ) -> Tuple[str, Dict[str, str]]:
     gripper_path = gripper_type.get_gripper_xml_path()
+    arm_base_path = arm_type.get_arm_xml_path()
 
     arm_tree = ET.parse(arm_base_path)
     arm_root = arm_tree.getroot()
@@ -312,9 +313,10 @@ def assemble_robot_xml(
 
 def save_assembled_robot_xml(
     gripper_type: GripperType,
-    arm_base_path: str = YAM_ARM_BASE_PATH,
+    arm_type: ArmType,
 ) -> str:
-    assembled_xml, mesh_files = assemble_robot_xml(gripper_type, arm_base_path)
+    assembled_xml, mesh_files = assemble_robot_xml(gripper_type, arm_type)
+    arm_base_path = arm_type.get_arm_xml_path()
 
     arm_name = os.path.splitext(os.path.basename(arm_base_path))[0]
     filename = f"{arm_name}_{gripper_type.value}.xml"
